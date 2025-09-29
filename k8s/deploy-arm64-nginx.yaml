@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-arm64
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: nginx-arm64
+  template:
+    metadata:
+      labels:
+        app: nginx-arm64
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+      - name: nginx
+        image: nginx:stable-alpine
+        ports:
+        - containerPort: 80
