@@ -1,0 +1,104 @@
+## Architecture Design – Innovate Inc.
+
+### App summary
+- SPA frontend (React)  
+- REST API backend (Python/Flask)  
+- Database: PostgreSQL  
+- Sensitive data → security is critical  
+- Expect growth from a few hundred users → millions  
+
+
+### 1. Cloud Environment
+- Use **AWS**. Start with **3 accounts** under one Org:
+  - `dev` – experiments and testing
+  - `staging` – pre-prod
+  - `prod` – live workloads only
+- Each account has its own VPC, billing separation, IAM boundaries.
+- Identity with **IAM Identity Center/SSO**, engineers assume roles, CI/CD uses OIDC.
+
+
+### 2. Network Design
+- One VPC per env (CIDR `/16`, split across 3 AZs).  
+- Subnets:
+  - Public → ALB, NAT
+  - Private (app) → EKS nodes
+  - Private (data) → RDS  
+- NAT GW (start with 1 to save $, scale later).  
+- Security groups:
+  - ALB: 80/443 from internet
+  - EKS nodes: from ALB SG
+  - DB: only from EKS SG  
+- DNS: Route53 (public + private zones).  
+- TLS: ACM certs → ALB.
+
+
+### 3. Compute Platform (EKS)
+- **EKS** cluster in each env, spread across 3 AZs.  
+- **Bootstrap node group**: small on-demand for system pods.  
+- **Karpenter** for app workloads:
+  - NodePools for both **x86 (c6i/m6i)** and **arm64 Graviton (c6g/m6g)**.
+  - Prefer **Spot**, fallback to on-demand.
+- Ingress: AWS Load Balancer Controller (ALB Ingress).  
+- Add-ons: CoreDNS, CNI, Metrics Server, ExternalDNS, CloudWatch logging.
+
+
+### 4. Containerization & CI/CD
+- Docker images:
+  - Backend: Python multi-stage Dockerfile
+  - Frontend: React build → static assets (serve from S3+CloudFront, or nginx container at start)
+- Registry: ECR.  
+- Pipeline (GitHub Actions or GitLab):
+  - build → test → push image → update Helm values
+  - deploy via ArgoCD or kubectl in pipeline  
+- Helm charts per service (API, frontend).
+
+
+### 5. Database
+- Start with **Amazon RDS PostgreSQL (Multi-AZ)**.  
+- Encrypted, backups enabled (PITR).  
+- Snapshots copied to second region daily.  
+- Later upgrade to **Aurora PostgreSQL** if scaling needed.  
+- DB only accessible from app node SG.
+
+
+### 6. Security
+- TLS everywhere (ACM certs on ALB, CloudFront).  
+- Secrets in **AWS Secrets Manager** (mounted with External Secrets Operator).  
+- IAM least privilege, pods use IRSA.  
+- S3 buckets private, if SPA uses CloudFront then enable origin access.  
+- Image scanning on ECR.  
+
+
+### 7. Scaling
+- API: HPA (CPU/memory, maybe RPS custom metric later).  
+- Karpenter: autoscale nodes Spot first.  
+- DB: vertical first, then Aurora read replicas.  
+- Frontend: CloudFront scales automatically.
+
+
+### 8. Monitoring & Logging
+- Start simple: **CloudWatch** for logs, metrics, alarms.  
+- Alarms: API 5xx, latency, pod restarts, node unhealthy, DB CPU/storage.  
+- Later: Prometheus + Grafana if needed.  
+
+
+### 9. Cost Notes
+- Biggest cost at low scale is NAT + RDS Multi-AZ.  
+- Graviton + Spot keeps compute cheap.  
+- Dev/staging can use 1 AZ + smaller RDS to save $.  
+
+
+### 10. High-Level Diagram
+
+Internet
+   |
+[ Route53 ]
+   |
+[  ALB  ]  <-- TLS/ACM
+   |
+[ EKS Cluster ]
+   |   - system node group (on-demand)
+   |   - Karpenter node pools (x86 + arm64, Spot preferred)
+   |
+   v
+[ RDS PostgreSQL ] (Multi-AZ, backups, encrypted)
